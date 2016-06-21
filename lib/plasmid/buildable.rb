@@ -1,58 +1,55 @@
+require 'plasmid/validatable'
+
 #TODO: figure out copyright on original Bookie code.
 module Plasmid
   ##
   #Represents an object with a "builder" DSL
   module Buildable
-    #TODO: accumulate validation errors and display them all at once?
-    #TODO: break into another mixin?
-    def validate!
-      self.class.validators.each do |validator|
-        self.instance_eval(&validator)
-      end
-    end
-
     def self.included(other_module)
+      # Pull in "dependencies"
+      other_module.include(Validatable)
+
+      # Pull in class methods
       other_module.extend(ClassMethods)
+
+      # Make sure subclasses also include Buildable and get their own builders
+      # We need to save the class's existing inheritance hook and call it when
+      # we're done.
+      old_inheritance_hook = other_module.method(:inherited)
+      other_module.define_singleton_method(:inherited) do |klass|
+        klass.include(Buildable)
+        old_inheritance_hook.call(klass)
+      end
+
+      # Create the builder class
+      # TODO: unit test the uniqueness of builders to their classes.
+      other_module.const_set(:Builder, Class.new do
+          include Builder
+
+          define_method(:initialize) do
+            @built = other_module.new
+          end
+        end)
     end
 
     module ClassMethods
-      attr_reader :validators
-      attr_writer :builder
-
       ##
       #Returns the builder class
       #
       #If a block is given, it is evaluated within the context of the builder class.
       def builder(&block)
-        @builder_class.instance_eval(&block) if block_given?
-        @builder_class
+        builder_class = const_get(:Builder)
+        builder_class.instance_eval(&block) if block_given?
+        builder_class
       end
 
-      def self.extended(other_module)
-        other_module.builder = Class.new do
-          extend Builder
-        end
-      end
-
+      ##
+      # Creates a builder, evaluates the given block in its context, and
+      # returns what it built
       def build(&block)
-        builder = builder.new
+        builder = const_get(:Builder).new
         builder.instance_eval(&block)
-        builder.config
-      end
-
-      def build_from_string(text, filename = '')
-        builder = builder.new
-        builder.instance_eval(text, filename)
-        builder.config
-      end
-
-      def load(file)
-        build_from_string(file.read, file.path)
-      end
-
-      def validate_self(&block)
-        @validators ||= []
-        @validators.push(block)
+        builder.built
       end
 
       ##
@@ -61,7 +58,7 @@ module Plasmid
       # Options:
       # - type: the property's type
       # - allow_nil: allow nil values (default is <tt>false</tt> if type is specified, <tt>true</tt> otherwise)
-      # - create_proxy: create a proxy setter method in the builder class (default is <tt>true</tt>)
+      # - create_writer: create a proxy writer method in the builder class (default is <tt>true</tt>)
       def property(name, options = nil)
         options ||= {}
         writer_name = "#{name}=".intern
@@ -69,6 +66,7 @@ module Plasmid
 
         attr_accessor(name)
 
+        # Handle nil- and type-checking.
         type = options[:type]
         allow_nil = options[:allow_nil]
         if type then
@@ -87,26 +85,39 @@ module Plasmid
           end
         end
 
-        #TODO: refactor this logic.
-        create_proxy = options[:create_proxy]
-        create_proxy = true if create_proxy.nil?
-        builder_class.property_writer(name) if create_proxy
+        #TODO: refactor this logic?
+        create_writer = options[:create_writer]
+        create_writer = true if create_writer.nil?
+        const_get(:Builder).property_writer(name) if create_writer
       end
     end
   end
 
+  ##
+  # Mixins for builder classes
   module Builder
-    define_method(:initialize) do
-      @built = other_module.new
+    def self.included(other_module)
+      other_module.extend(ClassMethods)
     end
 
     #TODO: support renaming of this.
     attr_reader :built
 
-    def self.property_writer(name)
-      writer_name = "#{name}=".intern
-      define_method(name) do |value|
-        @built.send(writer_name, value)
+    module ClassMethods
+      # TODO: just forward stuff with method_missing?
+      def property_reader(name)
+        name = name.intern
+        define_method(name) do
+          @built.send(name)
+        end
+      end
+
+      # TODO: take a block for custom logic?
+      def property_writer(name)
+        writer_name = "#{name}=".intern
+        define_method(name) do |value|
+          @built.send(writer_name, value)
+        end
       end
     end
   end
