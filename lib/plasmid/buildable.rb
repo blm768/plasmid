@@ -58,6 +58,8 @@ module Plasmid
       ##
       # Creates a builder, evaluates the given block in its context, and
       # returns what it built
+      #
+      # TODO: run validations?
       def build(&block)
         builder = const_get(:Builder).new
         builder.instance_eval(&block)
@@ -65,12 +67,15 @@ module Plasmid
       end
 
       ##
-      # Creates a builder property
+      # Creates a property which can be set through the builder object
+      #
+      # Outside of the builder, the property acts like a "regular" attribute.
       #
       # Options:
       # - type: the property's type
       # - allow_nil: allow nil values (default is <tt>false</tt> if type is specified, <tt>true</tt> otherwise)
       # - create_writer: create a proxy writer method in the builder class (default is <tt>true</tt>)
+      #   - TODO: rename?
       def property(name, options = nil)
         # Execution context: the class which includes Buildable
 
@@ -124,11 +129,25 @@ module Plasmid
         end
       end
 
+      ##
+      # Adds a property writer to the DSL
+      #
       # TODO: take a block for custom logic?
       def property_writer(name)
         writer_name = "#{name}=".intern
         define_method(name) do |value|
           @built.send(writer_name, value)
+        end
+      end
+
+      # TODO: document.
+      # TODO: create a helper in Buildable?
+      def sub_builder(name, klass)
+        # TODO: break into a static method?
+        writer_name = "#{name}=".intern
+        define_method(name) do |&block|
+          sub_built = klass.build(&block)
+          @built.send(writer_name, sub_built)
         end
       end
     end
